@@ -24,24 +24,25 @@ A .NET 8 demo demonstrating distributed tracing with OpenTelemetry across:
            ┌────────┴────────┐             ┌───────┴────────┐
            │  TradeService   │             │SettlementService│
            │   (Port 5001)   │             │   (Port 5002)   │
-           └────────┬────────┘             └───────┬─────────┘
-                    │                               │
-                    │  1. Store trade with          │  3. Read trade with
-                    │     traceparent               │     traceparent
-                    │                               │
-                    ▼                               ▼
-           ┌─────────────────────────────────────────────────┐
-           │                  PostgreSQL                      │
-           │          (trades table with trace context)       │
-           └─────────────────────────────────────────────────┘
-                    │                               ▲
-                    │  2. Send message              │
-                    │     (with trace context)      │
-                    ▼                               │
-           ┌─────────────────────────────────────────────────┐
-           │              Azure Service Bus                   │
-           │         (or Service Bus Emulator)                │
-           └─────────────────────────────────────────────────┘
+           └───┬─────────┬───┘             └───┬─────────┬───┘
+               │         │                     │         │
+               │         │                     │         │
+     1. Store  │         │ 2. Send message     │         │ 4. Read trade
+     trade w/  │         │    (auto trace      │         │    w/ traceparent
+     traceparent         │     propagation)    │         │
+               │         │                     │         │
+               ▼         └─────────┐   ┌───────┘         ▼
+           ┌──────────────┐        │   │        ┌──────────────┐
+           │  PostgreSQL  │        │   │        │  PostgreSQL  │
+           │  (write)     │        │   │        │  (read)      │
+           └──────────────┘        │   │        └──────────────┘
+                                   ▼   │
+                    ┌──────────────────┴───────────────────┐
+                    │          Azure Service Bus           │
+                    │       (or Service Bus Emulator)      │
+                    │                                      │
+                    │  3. Receive message (auto trace)     │
+                    └──────────────────────────────────────┘
 ```
 
 ## Trace Context Propagation
@@ -208,20 +209,25 @@ curl http://localhost:5002/api/settlement/{tradeId}/status
 
 ### Understanding the Trace Structure
 
+**Flow:**
+1. **TradeService** receives HTTP POST, stores trade in PostgreSQL (with traceparent), sends message to Service Bus
+2. **Service Bus** propagates trace context automatically via message headers
+3. **SettlementService** receives message, reads trade from PostgreSQL, links to original trace
+
 **TradeService trace:**
 ```
 POST /api/trades
 ├── TradeRepository.Create (stores traceparent in DB)
 ├── Npgsql: INSERT INTO trades...
-└── ServiceBusSender.Send
+└── ServiceBusSender.Send (trace context auto-propagated)
 ```
 
-**SettlementService trace:**
+**SettlementService trace (same trace ID via Service Bus):**
 ```
 ServiceBusProcessor.ProcessMessage
 ├── settlement.process_trade
-├── TradeRepository.GetById (reads traceparent)
-├── settlement.settle_trade [LINKED to TradeService trace]
+├── TradeRepository.GetById (reads traceparent from DB)
+├── settlement.settle_trade [LINKED to original span via DB traceparent]
 └── TradeRepository.UpdateStatus
 ```
 
