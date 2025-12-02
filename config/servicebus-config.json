@@ -1,0 +1,23 @@
+{
+  "UserConfig": {
+    "Namespaces": [
+      {
+        "Name": "sbemulator",
+        "Queues": [
+          {
+            "Name": "trade-messages",
+            "Properties": {
+              "MaxDeliveryCount": 10,
+              "LockDuration": "PT1M",
+              "DefaultMessageTimeToLive": "PT1H"
+            }
+          }
+        ]
+      }
+    ],
+    "Logging": {
+      "Type": "Console"
+    }
+  }
+}
+

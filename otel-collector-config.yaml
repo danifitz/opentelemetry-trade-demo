@@ -1,0 +1,75 @@
+# OpenTelemetry Collector Configuration
+# Receives telemetry from services and exports to Grafana Cloud
+
+receivers:
+  # OTLP receiver for traces, metrics, and logs
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor to reduce the number of exports
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Memory limiter to prevent out-of-memory issues
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Resource processor to add common attributes
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: development
+        action: upsert
+
+exporters:
+  # Grafana Cloud OTLP exporter for traces, metrics, and logs
+  otlphttp/grafana:
+    endpoint: ${GRAFANA_CLOUD_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/grafana_cloud
+
+  # Logging exporter for debugging
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  # Basic auth for Grafana Cloud
+  basicauth/grafana_cloud:
+    client_auth:
+      username: ${GRAFANA_CLOUD_INSTANCE_ID}
+      password: ${GRAFANA_CLOUD_API_KEY}
+
+  # Health check extension
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check, basicauth/grafana_cloud]
+  pipelines:
+    # Traces pipeline - send to Grafana Cloud
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/grafana, debug]
+
+    # Metrics pipeline - send to Grafana Cloud
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/grafana]
+
+    # Logs pipeline - send to Grafana Cloud
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/grafana]

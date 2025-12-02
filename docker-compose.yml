@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - GRAFANA_CLOUD_OTLP_ENDPOINT=${GRAFANA_CLOUD_OTLP_ENDPOINT}
+      - GRAFANA_CLOUD_INSTANCE_ID=${GRAFANA_CLOUD_INSTANCE_ID}
+      - GRAFANA_CLOUD_API_KEY=${GRAFANA_CLOUD_API_KEY}
+    networks:
+      - tracing-demo
+
+  # SQL Server (Azure SQL Edge for ARM64 compatibility)
+  sql-server:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: sql-server
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=ServiceBus_P@ssw0rd!
+    ports:
+      - "1433:1433"
+    networks:
+      - tracing-demo
+
+  # PostgreSQL Database
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    environment:
+      - POSTGRES_USER=demo
+      - POSTGRES_PASSWORD=demo123
+      - POSTGRES_DB=trades
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - tracing-demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d trades"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Azure Service Bus Emulator
+  # Services share network namespace with this container to use localhost
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    container_name: servicebus-emulator
+    ports:
+      - "5672:5672"
+      - "5001:5001"  # Trade Service
+      - "5002:5002"  # Settlement Service
+    volumes:
+      - ./config/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=ServiceBus_P@ssw0rd!
+      - SQL_SERVER=sql-server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - sql-server
+    networks:
+      - tracing-demo
+
+  # Trade Service - shares network with servicebus-emulator to use localhost
+  trade-service:
+    build:
+      context: .
+      dockerfile: src/TradeService/Dockerfile
+    container_name: trade-service
+    network_mode: "service:servicebus-emulator"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:5001
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - ENVIRONMENT=docker
+      - POSTGRES_CONNECTION_STRING=Host=host.docker.internal;Port=5432;Database=trades;Username=demo;Password=demo123
+      - USE_SERVICE_BUS_EMULATOR=true
+      - AZURE_SERVICE_BUS_QUEUE_NAME=trade-messages
+    depends_on:
+      - otel-collector
+      - servicebus-emulator
+      - postgres-db
+
+  # Settlement Service - shares network with servicebus-emulator to use localhost
+  settlement-service:
+    build:
+      context: .
+      dockerfile: src/SettlementService/Dockerfile
+    container_name: settlement-service
+    network_mode: "service:servicebus-emulator"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:5002
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - ENVIRONMENT=docker
+      - POSTGRES_CONNECTION_STRING=Host=host.docker.internal;Port=5432;Database=trades;Username=demo;Password=demo123
+      - USE_SERVICE_BUS_EMULATOR=true
+      - AZURE_SERVICE_BUS_QUEUE_NAME=trade-messages
+    depends_on:
+      - otel-collector
+      - servicebus-emulator
+      - postgres-db
+
+  # k6 Load Test Runner
+  k6-load-test:
+    image: grafana/k6:latest
+    container_name: k6-load-test
+    profiles:
+      - loadtest
+    volumes:
+      - ./tests:/tests:ro
+    command: run /tests/load-test.js
+    depends_on:
+      - trade-service
+      - settlement-service
+    network_mode: "service:servicebus-emulator"
+
+networks:
+  tracing-demo:
+    driver: bridge
+
+volumes:
+  postgres-data:
