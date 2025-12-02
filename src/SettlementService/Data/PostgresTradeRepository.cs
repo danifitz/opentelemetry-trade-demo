@@ -150,38 +150,19 @@ public class PostgresTradeRepository : ITradeRepository
     }
 
     /// <summary>
-    /// Parses a W3C traceparent header into an ActivityContext.
+    /// Parses a W3C traceparent header into an ActivityContext using the built-in TryParse.
     /// Format: "{version}-{trace-id}-{parent-id}-{trace-flags}"
     /// Example: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
     /// </summary>
     private ActivityContext? ParseTraceParent(string traceParent, string? traceState)
     {
-        try
+        if (ActivityContext.TryParse(traceParent, traceState, out var context))
         {
-            var parts = traceParent.Split('-');
-            if (parts.Length < 4)
-            {
-                _logger.LogWarning("Invalid traceparent format: {TraceParent}", traceParent);
-                return null;
-            }
-
-            // Parse components
-            // parts[0] = version (e.g., "00")
-            // parts[1] = trace-id (32 hex chars)
-            // parts[2] = parent-id/span-id (16 hex chars)
-            // parts[3] = trace-flags (2 hex chars)
-
-            var traceId = ActivityTraceId.CreateFromString(parts[1].AsSpan());
-            var spanId = ActivitySpanId.CreateFromString(parts[2].AsSpan());
-            var traceFlags = parts[3] == "01" ? ActivityTraceFlags.Recorded : ActivityTraceFlags.None;
-
-            return new ActivityContext(traceId, spanId, traceFlags, traceState);
+            return context;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse traceparent: {TraceParent}", traceParent);
-            return null;
-        }
+        
+        _logger.LogWarning("Failed to parse traceparent: {TraceParent}", traceParent);
+        return null;
     }
 
     private static Trade MapToTrade(NpgsqlDataReader reader)

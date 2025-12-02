@@ -167,15 +167,17 @@ public class TradeMessageProcessor : BackgroundService
                 return;
             }
 
-            // Create a settlement span that is LINKED to the original trace context
+            // Create a settlement span and link to the original trace context from the database
             // This demonstrates trace context propagation via the database!
             // The span will have:
             // 1. Parent: Current span (from Service Bus message processing)
             // 2. Link: Original span from TradeService that created the trade
-            ActivityLink[]? links = null;
+            var links = originalTraceContext.HasValue
+                ? new[] { new ActivityLink(originalTraceContext.Value) }
+                : null;
+            
             if (originalTraceContext.HasValue)
             {
-                links = new[] { new ActivityLink(originalTraceContext.Value) };
                 _logger.LogInformation(
                     "Creating settlement span linked to original trade creation. " +
                     "Original TraceId: {TraceId}, SpanId: {SpanId}",
@@ -186,15 +188,15 @@ public class TradeMessageProcessor : BackgroundService
             using var activity = TelemetryExtensions.ActivitySource.StartActivity(
                 "settlement.settle_trade",
                 ActivityKind.Internal,
-                default(ActivityContext),  // Use current context as parent
-                new[] 
-                { 
+                default(ActivityContext),
+                tags: new[]
+                {
                     new KeyValuePair<string, object?>("trade.id", message.TradeId),
                     new KeyValuePair<string, object?>("trade.instrument", trade.Instrument),
                     new KeyValuePair<string, object?>("trade.counterparty", trade.Counterparty),
                     new KeyValuePair<string, object?>("trace.db_propagation", originalTraceContext.HasValue)
                 },
-                links);
+                links: links);
 
             // Simulate settlement processing
             _logger.LogInformation("Settling trade {TradeId} for {Instrument}", message.TradeId, trade.Instrument);
