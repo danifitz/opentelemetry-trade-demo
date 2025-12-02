@@ -158,8 +158,17 @@ USE_SERVICE_BUS_EMULATOR=true
 
 ### 2. Run the Demo
 
+**Linux/macOS:**
 ```bash
 ./scripts/run-demo.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+# If needed, allow script execution first:
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+.\scripts\run-demo.ps1
 ```
 
 This will:
